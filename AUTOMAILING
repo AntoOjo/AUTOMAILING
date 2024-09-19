@@ -1,0 +1,141 @@
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import os
+import time
+import threading
+from tkinter import *
+from tkinter import ttk
+from tkinter import filedialog, messagebox
+
+# Limite de taille des pièces jointes (4.9 Mo pour éviter de dépasser 5 Mo après encodage)
+MAX_ATTACHMENT_SIZE = 4.9 * 1024 * 1024  # Taille en octets (4.9 Mo)
+
+def diviser_fichier(fichier):
+    """Divise un fichier en morceaux de taille maximale définie."""
+    with open(fichier, 'rb') as f:
+        contenu = f.read()
+
+    # Diviser le fichier en morceaux de taille MAX_ATTACHMENT_SIZE
+    chunks = [contenu[i:i + int(MAX_ATTACHMENT_SIZE)] for i in range(0, len(contenu), int(MAX_ATTACHMENT_SIZE))]
+    return chunks
+
+def envoyer_mail_avec_piece_jointe(sender_email, password, recipient_email, sujet, fichier_chunk, nom_piece_jointe):
+    """Envoie un email avec une pièce jointe .mp3."""
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = sujet
+
+    # Ajouter la pièce jointe
+    part = MIMEBase('audio', 'mpeg')
+    part.set_payload(fichier_chunk)
+    encoders.encode_base64(part)
+    part.add_header('Content-Disposition', f'attachment; filename={nom_piece_jointe}')
+    
+    msg.attach(part)
+
+    try:
+        # Connexion au serveur SMTP Gmail
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()  # Sécuriser la connexion
+        server.login(sender_email, password)
+
+        # Envoi de l'email
+        server.sendmail(sender_email, recipient_email, msg.as_string())
+        print(f"Email envoyé avec succès à {recipient_email} avec la pièce jointe {nom_piece_jointe}")
+    
+    except Exception as e:
+        print(f"Erreur lors de l'envoi de l'email : {e}")
+    
+    finally:
+        server.quit()
+
+def envoyer_fichier_par_email(fichier, sender_email, password, recipient_email, delai_jours, progress_listbox):
+    """Divise un fichier en morceaux et les envoie par email avec un délai entre chaque envoi."""
+    chunks = diviser_fichier(fichier)
+    
+    # Conversion des jours en secondes
+    delai_secondes = delai_jours * 24 * 60 * 60
+    
+    for index, chunk in enumerate(chunks):
+        sujet = f"Partie {index + 1} du fichier {os.path.basename(fichier)}"
+        nom_piece_jointe = f"{os.path.basename(fichier)}_partie_{index + 1}.mp3"
+        
+        # Envoi du mail
+        envoyer_mail_avec_piece_jointe(sender_email, password, recipient_email, sujet, chunk, nom_piece_jointe)
+        
+        # Mise à jour de la liste de progression
+        progress_listbox.insert(END, f"Email {index + 1}/{len(chunks)} envoyé avec la pièce jointe {nom_piece_jointe}")
+        progress_listbox.update()
+        
+        # Pause avant d'envoyer le prochain email
+        if index < len(chunks) - 1:  # Si ce n'est pas le dernier email
+            print(f"Attente de {delai_jours} jour(s) ({delai_secondes} secondes) avant d'envoyer le prochain email...")
+            time.sleep(delai_secondes)
+
+def lancer_envoi(sender_email, password, recipient_email, fichier, delai_jours, progress_listbox):
+    """Lance l'envoi des emails dans un thread séparé pour ne pas bloquer l'interface."""
+    threading.Thread(target=envoyer_fichier_par_email, args=(fichier, sender_email, password, recipient_email, delai_jours, progress_listbox)).start()
+
+def selectionner_fichier(entry_fichier):
+    """Ouvre une boîte de dialogue pour sélectionner un fichier .mp3."""
+    fichier = filedialog.askopenfilename(filetypes=[("Fichiers MP3", "*.mp3")])
+    entry_fichier.delete(0, END)
+    entry_fichier.insert(0, fichier)
+
+def interface_utilisateur():
+    """Création de l'interface utilisateur avec Tkinter."""
+    root = Tk()
+    root.title("Envoi de fichiers .mp3 par e-mail")
+    
+    # Cadre principal
+    frame = Frame(root)
+    frame.pack(padx=10, pady=10)
+
+    # Champ pour l'email de l'expéditeur
+    Label(frame, text="Votre email:").grid(row=0, column=0, sticky=E)
+    entry_sender_email = Entry(frame, width=40)
+    entry_sender_email.grid(row=0, column=1)
+
+    # Champ pour le mot de passe
+    Label(frame, text="Votre mot de passe:").grid(row=1, column=0, sticky=E)
+    entry_password = Entry(frame, width=40, show='*')
+    entry_password.grid(row=1, column=1)
+
+    # Champ pour l'email du destinataire
+    Label(frame, text="Email du destinataire:").grid(row=2, column=0, sticky=E)
+    entry_recipient_email = Entry(frame, width=40)
+    entry_recipient_email.grid(row=2, column=1)
+
+    # Champ pour sélectionner le fichier
+    Label(frame, text="Fichier .mp3:").grid(row=3, column=0, sticky=E)
+    entry_fichier = Entry(frame, width=40)
+    entry_fichier.grid(row=3, column=1)
+    Button(frame, text="Parcourir...", command=lambda: selectionner_fichier(entry_fichier)).grid(row=3, column=2)
+
+    # Champ pour le délai entre les envois
+    Label(frame, text="Délai entre envois (en jours):").grid(row=4, column=0, sticky=E)
+    entry_delai_jours = Entry(frame, width=10)
+    entry_delai_jours.grid(row=4, column=1, sticky=W)
+
+    # Bouton pour lancer l'envoi
+    Button(frame, text="Lancer l'envoi", command=lambda: lancer_envoi(
+        entry_sender_email.get(), 
+        entry_password.get(), 
+        entry_recipient_email.get(), 
+        entry_fichier.get(), 
+        int(entry_delai_jours.get()), 
+        progress_listbox
+    )).grid(row=5, column=1, pady=10)
+
+    # Liste de suivi des envois
+    Label(frame, text="Progression des envois:").grid(row=6, column=0, sticky=E)
+    progress_listbox = Listbox(frame, width=60, height=10)
+    progress_listbox.grid(row=6, column=1, columnspan=2)
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    interface_utilisateur()
